@@ -1,0 +1,162 @@
+<?php
+
+/**
+ * Implements hook_menu().
+ */
+function tripal_iplant_connect_menu() {
+
+  $items['iplant'] = array(
+    'title' => 'iPlant Interface',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('iplant_ui', 1, 2),
+    'access arguments' => array('access content'),
+    'type' => MENU_NORMAL_ITEM,
+  );
+
+  $items['iplant/report/%'] = array(
+    'title' => 'iPlant Results',
+    'page callback' => 'show_iplant_results',
+    'page arguments' => array(2),
+    'access arguments' => array('access content'),
+    'type' => MENU_CALLBACK,
+  );
+
+  return $items;
+}
+
+function tripal_iplant_connect_theme() {
+
+  $path = drupal_get_path('module', 'tripal_iplant_connect');
+
+  $items['iplant_report_done'] = array(
+    'template' => 'iplant_report_done',
+    'path' => "$path/theme",
+  );
+
+  $items['iplant_report_pending'] = array(
+    'template' => 'iplant_report_pending',
+    'path' => "$path/theme",
+  );
+
+  return $items;
+}
+
+function iplant_ui($form, $form_state) {
+
+	$fam = arg(1);
+	$seq = arg(2);
+	$nm = arg(3);
+
+	$form['fam'] = array(
+		'#type' => 'textfield',
+		'#title' => t('Family'),
+		'#default_value' => $fam,
+		'#description' => t('Enter family name in the text area.'),
+	);
+
+	$form['nam'] = array(
+		'#type' => 'textfield',
+		'#title' => t('Query Name'),
+		'#default_value' => $nm,
+		'#description' => t('Enter name of the query in the text area.'),
+	);
+
+	$form['seq'] = array(
+		'#type' => 'textfield',
+		'#title' => t('Query Sequence'),
+		'#default_value' => $seq,
+		'#description' => t('Enter query sequence in the text area.'),
+	);
+
+	$form['submit'] = array(
+		'#type' => 'submit',
+		'#default_value' => ' Run iPlant ',
+	);
+
+	return $form;
+}
+
+function iplant_ui_submit($form, &$form_state) {
+	global $user;
+
+	$mdir = $form_state['values']['dir'];
+	watchdog('iplant_ui_submit', "Got directory $mdir");
+	$job_args = array(
+		'arg1' => "$mdir",
+		'arg2' => 'Second arg'
+  	);
+	$job_id = tripal_add_job(
+		'Run iPlant test',
+		'iPlant',
+		'run_iPlant_script',
+		$job_args,
+		$user->uid
+	);
+	watchdog("iplant_ui_submit", "Request $job_id submitted");
+	drupal_goto("iplant/report/$job_id");
+}
+
+function tripal_iplant_connect_admin() {
+  $output = '';
+
+  // set the breadcrumb
+  $breadcrumb = array();
+  $breadcrumb[] = l('Home', '<front>');
+  $breadcrumb[] = l('Administration', 'admin');
+  $breadcrumb[] = l('Tripal', 'admin/tripal');
+  $breadcrumb[] = l('Extensions', 'admin/tripal/extension');
+  $breadcrumb[] = l('iPlant Connect', 'admin/tripal/extension/tripal_iplant_connect');
+  drupal_set_breadcrumb($breadcrumb);
+
+  $form['iplant_user_name'] = array(
+    '#title' => t('User name'),
+    '#type' => 'textfield'
+  );
+  $form['iplant_password'] = array(
+    '#title' => t('Password'),
+    '#type' => 'textfield'
+  );
+  $form['#submit'][] = 'tripal_iplant_connect_submit';
+  return system_settings_form($form);
+
+#  $output .= "The Tripal iPlant Connect module adds iPlant interface to Tripal systems.";
+
+#  return $output;
+}
+
+function tripal_iplant_connect_submit($form, $form_state) {
+
+  drupal_set_message(t('Got the submit'));
+
+  $uid = $form_state['value']['iplant_user_name'];
+  $pas = $form_state['value']['iplant_password'];
+
+  $type = 'iPlant Connect';
+  $msg = 'Got user name $uid and password $pas';
+  drupal_set_message(t($msg));
+}
+
+function run_iPlant_script($arg1, $arg2, $job_id=NULL) {
+
+  watchdog("iPlant run", "Running iPlant Script with args $arg1 and $arg2");
+  $resFile = "/tmp/job_$job_id.txt";
+  $res = system("ls -l $arg1 > $resFile");
+  watchdog("iPlant results", "Got $res for job $job_id into file $resFile");
+  print "\nGot Results = $res\n\n";
+}
+
+function show_iplant_results($job_id) {
+
+  $job = tripal_get_job($job_id);
+  if ($job->start_time == NULL and $job->end_time == NULL) {
+    return theme('iplant_report_pending', array('status_code' => 0, 'status' => 'Pending'));
+  } elseif ($job->status == 'Cancelled') {
+    return theme('iplant_report_pending', array('status_code' => 999, 'status' => 'Cancelled'));
+  } elseif ($job->end_time !== NULL) {
+    return theme('iplant_report_done', array('job_id' => $job_id));
+  } else {
+    return theme('iplant_report_pending', array('status_code' => 1, 'status' => 'Running'));
+  }
+
+  return '';
+}

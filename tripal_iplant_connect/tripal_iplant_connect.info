@@ -1,0 +1,10 @@
+name = Tripal iPlant Interface
+description = A module handling iPlant interface
+core = 7.x
+version = 7.x-2.0
+project = tripal_iplant_connect
+package = Tripal Extensions 
+
+dependencies[] = tripal_core
+dependencies[] = tripal_feature
+dependencies[] = tripal_analysis

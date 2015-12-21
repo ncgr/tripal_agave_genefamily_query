@@ -1,0 +1,504 @@
+#!/usr/bin/perl
+
+use JSON::Parse ':all';
+use File::Temp qw/ tempfile tempdir mktemp /;
+use File::Basename;
+
+if ($#ARGV < 1) {
+	print "$0: Usage <input file> <config file>\n";
+	exit(0);
+}
+
+my $inputFile = $ARGV[0];
+my $configFile = $ARGV[1];
+
+my $globalRetry = 10;
+my $currentRetry = -1;
+my $globalTimeout = 1200;
+my $longTimeout = 1200;
+my $shortTimeout = 5;
+my $toDeleteCloud = "";
+my $toDeleteLocal = "";
+
+#
+# Get user and key from config file
+#
+
+open(F, $configFile) or die "$0: Unable to access configuration file $configFile: $! ";
+my $c = <F>;
+close(F);
+chomp($c);
+my $config = parse_json($c);
+my $key = $config->{access_token};
+my $user = $config->{username};
+my $apikey = $config->{apikey};
+my $refresh = $config->{refresh_token};
+my $apisecret = $config->{apisecret};
+
+my $fileName = "$user/$inputFile";
+
+my $t, $cmd, $s, $m;
+
+#
+# Generate unique file name
+#
+
+print STDERR "Getting unique file name for $fileName\n";
+my ($uF, $iF) = SelectUnique($key, $fileName, $inputFile);
+print STDERR "Got unique file name: $iF, path: $uF\n";
+
+#
+# Upload and confirm file
+#
+
+print STDERR "Uploading file $iF\n";
+UploadFile($inputFile, $iF, $uF, $key);
+
+#
+# Create and upload MAFFT config file
+#
+
+my $uniqueCallBack = "1a626lz1";
+my $uniqueRequest = "Mafft run";
+
+my $dir = tempdir( CLEANUP => 1 );
+my ($fH, $fN) = tempfile( DIR => $dir );
+
+print $fH "{\n\t\"name\":\t\"$uniqueRequest\",\n\t\"appId\":\t\"Mafft-7.0.17u1\",\n\t\"inputs\":\t{\n\t\t\"input_seq\":\t\"agave://data.iplantcollaborative.org/$uF\"\n\t},\n\t\"parameters\":\t{\n\t},\n\t\"notifications\":\t[\t{\n\t\t\"url\":\t\"http://requestbin.agaveapi.co/$uniqueCallBack?job_status=\$\{JOB_STATUS\}&job_id=\$\{JOB_ID\}\",\n\t\t\"event\":\t\"*\",\n\t\t\"persistent\":\ttrue\n\t}\t]\n}\n";
+
+close($fH);
+my $bN = "tt." . basename($fN) . ".json";
+system("mv $fN $bN");
+AddFile($toDeleteLocal, $bN);
+UploadFile($bN, $bN, "$user/$bN", $key);
+sleep($shortTimeout);
+
+#
+# Submit and wait for Mafft
+#
+
+my $timeout = $globalTimeout;
+my ($status, $pid) = RunProcess($bN, $key, $timeout);
+if ($status eq "TIMEOUT") {
+	print "$0: Timed out waiting for Mafft, please try again.\n";
+	CleanupFinal($user, $key, $toDeleteCould, $toDeleteLocal);
+	exit(0);
+} elsif ($status eq "ERROR") {
+	print "$0: Process failed with message $m\n";
+	CleanupFinal($user, $key, $toDeleteCould, $toDeleteLocal);
+	exit(0);
+}
+sleep($shortTimeout);
+sleep($shortTimeout);
+
+#
+# Retrieve and confirm Mafft results file
+#
+
+$fN = mktemp("mafft_out_XXXXX");
+$timeout = $globalTimeout;
+$status = GetResults($fN, "mafft_out.fa", $pid, $key, $timeout);
+if ($status eq "TIMEOUT") {
+	print "$0: Timed out waiting for Mafft results, please try again.\n";
+	CleanupFinal($user, $key, $toDeleteCould, $toDeleteLocal);
+	exit(0);
+}
+sleep($shortTimeout);
+
+#
+# Upload and confirm Mafft output file
+#
+
+$uF = "$user/$fN";
+UploadFile($fN, $fN, $uF, $key);
+sleep($shortTimeout);
+
+my $mafftResults = $fN;
+
+#
+# Create and upload FastTree config file
+#
+
+$uniqueCallBack = "1a626lz1";
+$uniqueRequest = "FastTree run";
+
+$dir = tempdir( CLEANUP => 1 );
+($fH, $fN) = tempfile( DIR => $dir );
+
+print $fH "{\n\t\"name\":\t\"$uniqueRequest\",\n\t\"appId\":\t\"FasttreeDispatcher-2.1.4u1\",\n\t\"inputs\":\t{\n\t\t\"inFasta\":\t\"agave://data.iplantcollaborative.org/$user/$mafftResults\"\n\t},\n\"parameters\":\t{},\n\"notifications\":\t[\t{\n\t\t\"url\":\t\"http://requestbin.agaveapi.co/$uniqueCallBack?job_status=\$\{JOB_STATUS\}&job_id=\$\{JOB_ID\}\",\n\t\t\"event\":\t\"*\",\n\t\t\"persistent\":\ttrue\n\t}\t]\n}\n";
+
+close($fH);
+my $bN = "tt." . basename($fN) . ".json";
+system("mv $fN $bN");
+AddFile($toDeleteLocal, $bN);
+UploadFile($bN, $bN, "$user/$bN", $key);
+sleep($shortTimeout);
+
+#
+# Run FastTree
+#
+
+my $timeout = $longTimeout;
+my ($status, $pid) = RunProcess($bN, $key, $timeout);
+if ($status eq "TIMEOUT") {
+	print "$0: Timed out waiting for Mafft, please try again.\n";
+	CleanupFinal($user, $key, $toDeleteCould, $toDeleteLocal);
+	exit(0);
+} elsif ($status eq "ERROR") {
+	print "$0: Process failed with message $m\n";
+	CleanupFinal($user, $key, $toDeleteCould, $toDeleteLocal);
+	exit(0);
+}
+sleep($shortTimeout);
+sleep($shortTimeout);
+
+#
+# Retrieve FastTree Results
+#
+
+$fN = mktemp("FastTree_XXXXX");
+$timeout = $globalTimeout;
+$status = GetResults($fN, "fasttree.nwk", $pid, $key, $timeout);
+if ($status eq "TIMEOUT") {
+	print "$0: Timed out waiting for FastTree results, please try again.\n";
+	CleanupFinal($user, $key, $toDeleteCould, $toDeleteLocal);
+	exit(0);
+}
+
+my $fastTreeResults = $fN;
+print "Mafft Results File: $mafftResults, Fast Tree Results File: $fastTreeResults\n";
+
+#
+# Cleanup
+#
+
+CleanupFinal($user, $key, $toDeleteCould, $toDeleteLocal);
+exit(0);
+
+#
+# Helper functions
+#
+
+sub ReconnectAndResubmit {
+	my ($req) = @_;
+	my $t, $c;
+
+	$t = "curl -sku \"$apikey:$apisecret\" -X POST -d \"grant_type=refresh_token&refresh_token=$refresh&scope=PRODUCTION\" -H \"Content-Type:application/x-www-form-urlencoded\" https://agave.iplantc.org/token";
+	$c = RunCurl($t);
+	my ($status) = ProcessResponse($c, "");
+	if ($status ne "failed") {
+		$c = `$req 2>&1`;
+		return ProcessResponse($c, "");
+	}
+}
+
+sub Resubmit {
+	my ($req) = @_;
+	my $c;
+
+	print STDERR "Resubmitting request $req, count: $currentRetry.", caller, "\n";
+	#
+	# Pause before resubmitting
+	#
+	sleep($shortTimeout);
+	$c = `$req 2>&1`;
+	#
+	# Resubmit limited times
+	#
+	if ($currentRetry > 0) {
+		$currentRetry--;
+		return ProcessResponse($c, $req);
+	}
+	#
+	# Final retry
+	#
+	$currentRetry = -1;
+	return ProcessResponse($c, "");
+}
+
+sub ProcessResponse {
+	my ( $ret, $req ) = @_;
+	my $status = "", $message = "", $pid = 0, $jobStat = "";
+	my $results;
+	my $loc;
+	my $files = "";
+
+	$loc = index($ret, "curl: ");
+	if ($loc != -1 or $ret eq "") {
+		#
+		# Curl error
+		#
+
+		if ($req ne "") {
+			#
+			# Will retry limited times
+			#
+			if ($currentRetry == -1) {
+				$currentRetry = $globalRetry;
+			}
+			return Resubmit($req);
+		}
+		my $err = substr($ret, $loc);
+		print "$0 (ProcessRequest:", caller, "): Curl error after retry: $err";
+		CleanupFinal($user, $key, $toDeleteCould, $toDeleteLocal);
+		exit(0);
+	}
+	if (substr($ret, 0, 1) eq "<") {
+		# This is an error message;
+		my @tokens = split /message\>/, $ret;
+		my $msgStart = $tokens[1];
+		my ($msg, @other) = split /\</, $msgStart;
+		if ($msg eq "Access Token Expired" and $req ne "") {
+			return ReconnectAndResubmit($req);
+		} else {
+			print "$0 (ProcessResponse:", caller, "): Error from curl request: $ret\n";
+			CleanupFinal($user, $key, $toDeleteCould, $toDeleteLocal);
+			exit(0);
+		}
+		if (substr($ret, 0, 1) eq "<") {
+			@tokens = split /message\>/, $ret;
+			$msgStart = $tokens[1];
+			($msg, @other) = split /\</, $msgStart;
+			print "$0 (ProcessResponse:", caller, "): Error from curl request: $ret\n";
+			CleanupFinal($user, $key, $toDeleteCould, $toDeleteLocal);
+			exit(0);
+		}
+	}
+	my $loc = index($ret, "{");
+	if ($loc == -1) {
+		print "$0 (ProcessResponse:", caller, "): No valid JSON structure in buf: $ret\n\treq = $req\n";
+		CleanupFinal($user, $key, $toDeleteCould, $toDeleteLocal);
+		exit(0);
+	}
+	my $jsonRet = substr($ret, $loc);
+	my $pvar = parse_json($jsonRet);
+
+	#
+	# If this is a refresh request, there is no status just the expiry time
+	#
+	if (exists $pvar->{expires_in}) {
+		my $exp = $pvar->{expires_in};
+		return $exp;
+	}
+
+	$status = $pvar->{status};
+	$message = $pvar->{message};
+	if (exists $pvar->{result}) {
+		if (ref($pvar->{result}) eq "HASH") {
+			$results = $pvar->{result};
+		} elsif (ref($pvar->{result}) eq "ARRAY") {
+			my @rr = @{$pvar->{result}};
+			$results = $rr[0];
+			if ($results->{type} eq "file") {
+				my $i = 0;
+				foreach $res (@rr) {
+					if ($i > 0) {
+						$files .= ";";
+					}
+					$files .= $res->{"_links"}->{"self"}->{"href"};
+				}
+			}
+		} else {
+			print "$0 (ProcessResults:", caller, "): Unexpected JSON structure at result(", ref($pvar->{result}), "): $jsonRet\n";
+			CleanupFinal($user, $key, $toDeleteCould, $toDeleteLocal);
+			exit(0);
+		}
+		$pid = $results->{id};
+		$jobStat = $results->{status};
+	}
+
+	$currentRetry = -1;
+	return ($status, $message, $pid, $jobStat, $files);
+}
+
+sub ConfirmFile {
+	my ($f, $tm, $k) = @_;
+	my $count = 0;
+	my $c, $r, $t;
+
+	while ($count < $tm) {
+		$c = "curl -sk -H \"Authorization: Bearer $k\" https://agave.iplantc.org/files/v2/listings/$f?pretty=true";
+		$t = RunCurl($c);
+		my ($s, $m) = ProcessResponse($t, $c);
+		if ($s eq "success") {
+			return;
+		}
+		sleep ($shortTimeout);
+		$count++;
+	}
+
+	print "$0 (ConfirmFile): Unable to confirm file upload (timeout $tm seconds)\n";
+	CleanupFinal($user, $key, $toDeleteCould, $toDeleteLocal);
+	exit(0);
+}
+
+sub SelectUnique {
+	my ($k, $p, $f) = @_;
+	my $c, $t, $nf, $np;
+	my $s, $m, $count=0;
+
+	$c = "curl -sk -H \"Authorization: Bearer $k\" https://agave.iplantc.org/files/v2/listings/$p?pretty=true";
+	$t = RunCurl($c);
+	($s, $m) = ProcessResponse($t, $c);
+	if ($s eq "error") {
+		return ($p, $f);
+	}
+	while (1) {
+		$nf = "$f.$count";
+		$np = "$p.$count";
+		$c = "curl -sk -H \"Authorization: Bearer $k\" https://agave.iplantc.org/files/v2/listings/$np?pretty=true";
+		$t = RunCurl($c);
+		($s, $m) = ProcessResponse($t, $c);
+		if ($s eq "error") {
+			if ($nf eq "") {
+				$nf = $np;
+			}
+			return ($np, $nf);
+		}
+		$count++;
+	}
+}
+
+sub UploadFile {
+	my ($f, $f2, $fp, $k) = @_;
+	my $cmd, $t, $s, $m;
+
+	$cmd = "curl -# -k -H \"Authorization: Bearer $k\" -X POST -F \"fileToUpload=\@$f\" -F \"fileName=$f2\" https://agave.iplantc.org/files/v2/media/$user/?pretty=true";
+	$t = RunCurl($cmd);
+
+	($s, $m) = ProcessResponse($t, $cmd);
+	if ($s ne "success") {
+		print "$0 (UploadFile): Curl failed to upload file ($f): $m\n";
+		CleanupFinal($user, $k, $toDeleteCould, $toDeleteLocal);
+		exit(0);
+	}
+
+	sleep($shortTimeout);
+	my $timeout = $globalTimeout;
+	ConfirmFile($fp, $timeout, $k);
+	AddFile($toDeleteCloud, $f2);
+}
+
+sub RunProcess {
+	my ($config, $k, $tm) = @_;
+	my $c, $t, $s, $m, $id;
+	my $count = 0;
+
+	$c = "curl -sk -H \"Authorization: Bearer $k\" -X POST -F \"fileToUpload=\@$config\" https://agave.iplantc.org/jobs/v2/?pretty=true";
+	$t = RunCurl($c);
+	($s, $m, $id) = ProcessResponse($t, $c);
+	if ($s ne "success") {
+		return ("ERROR", $m);
+	}
+	while ($count < $tm) {
+		$c = "curl -sk -H \"Authorization: Bearer $k\" https://agave.iplantc.org/jobs/v2/$id/status?pretty=true";
+		$t = RunCurl($c);
+		($s, $m, $id, $jobStat) = ProcessResponse($t, $c);
+		if ($jobStat eq "FINISHED") {
+			return ($s, $id);
+		}
+		sleep($shortTimeout);
+		$count++;
+	}
+	return ("TIMEOUT", "");
+}
+
+sub GetResults {
+	my ($f, $o, $id, $k, $tm) = @_;
+	my $c, $t, $count=0, @vals, $error;
+
+#
+# Check for error
+#
+#	$error = GetError($k, $id, $tm);
+#	if ($error eq "TIMEOUT") {
+#		return "TIMEOUT";
+#	} elsif (substr($error, 0, 5) eq "ERROR") {
+#		return $error;
+#	}
+
+#
+# No error, proceed with retrieving results
+#
+
+	while ($count < $tm) {
+		$c = "curl -k -H \"Authorization: Bearer $k\"  -o $f https://agave.iplantc.org/jobs/v2/$id/outputs/media/$o";
+		$t = RunCurl($c);
+		(@vals) = stat($f);
+		if ($vals[7] > 0) {
+			return "SUCCESS";
+		}
+		sleep($shortTimeout);
+		$count++;
+	}
+	return "TIMEOUT";
+}
+
+#
+# We are trying to get an error message.
+# If we are unable to get that message, we assume success
+# Unless we time out
+#
+sub GetError {
+	my ($kk, $pid, $ttm) = @_;
+	my $c, $t, $count = 0, @vv;
+
+	while ($count < $ttm) {
+		$c = "Calling curl -sk -H \"Authorization: Bearer $kk\" https://agave.iplantc.org/jobs/v2/$pid/outputs/listings/?pretty=true";
+		$t = RunCurl($c);
+		my ($st, $msg, $p, $js, $f) = ProcessResponse($t, $c);
+		foreach my $ff (split /;/, $f) {
+			my ($fo, $dd, $suf) = fileparse($ff);
+			if ($suf eq "err") {
+				$st = GetResults($fo, $fo, $pid, $kk, $ttm);
+				if ($st eq "success") {
+					open(F, $fo) or return "success";
+					my $l = <F>;
+					close(F);
+					chomp($l);
+					return "ERROR: $l";
+				} elsif ($st eq "TIMEOUT") {
+					return "TIMEOUT";
+				} else {
+					return "success";
+				}
+			}
+		}
+		return "success";
+	}
+	return "TIMEOUT";
+}
+
+sub RunCurl {
+	my ($cmd) = @_;
+	my $res;
+
+	print STDERR "> $cmd\n";
+	$res = `$cmd 2>&1`;
+	print STDERR "< $res\n";
+	return $res;
+}
+
+sub CleanupFinal {
+	my ($u, $k, $cloud, $local) = @_;
+	my $c, $t;
+
+	for my $f (split /,/, $cloud) {
+		sleep($shortTimeout);
+		$c = "curl -sk -H \"Authorization: Bearer $k\" -X DELETE https://agave.iplantc.org/files/v2/media/$u/$f?pretty=true";
+		$t = RunCurl($c);
+	}
+	for my $f (split /,/, $local) {
+		print STDERR "Removing $f\n";
+		system("rm $f");
+	}
+}
+
+sub AddFile {
+	my ($str, $add) = @_;
+
+	if ($str ne "") {
+		$str .= ",";
+	}
+	$str .= $add;
+}

@@ -18,20 +18,16 @@
 function get_blast_database($identifiers) {
   $node = FALSE;
 
-    watchdog("get_blast_db", "enter");
   if (isset($identifiers['nid'])) {
-    watchdog("get_blast_db", "set nid");
     $node = node_load($identifiers['nid']);
   }
   elseif (isset($identifiers['name'])) {
 
-    watchdog("get_blast_db", "set name");
     $nid = db_query('SELECT nid FROM {blastdb} WHERE name=:name', array(':name' => $identifiers['name']))->fetchField();
     $node = node_load($nid);
 
   } elseif (isset($identifiers['path'])) {
 
-    watchdog("get_blast_db", "set path");
     $nid = db_query('SELECT nid FROM {blastdb} WHERE path=:path', array(':path' => $identifiers['path']))->fetchField();
     $node = node_load($nid);
 
@@ -118,13 +114,6 @@ function run_BLAST_tripal_job($program, $query, $database, $output_filestub, $op
  $output_file_html = variable_get('file_public_path', conf_path() . '/files') . DIRECTORY_SEPARATOR . $output_filestub . '.blast.html';
 
 
-  print "\nExecuting $program\n\n";
-  print "Query: $query\n";
-  print "Database: $database\n";
-  print "Results File: $output_file\n";
-
-  print "Options:\n";
-
   // Allow administrators to use an absolute path for these commands.
   // Defaults to using $PATH.
 	$blast_path = variable_get('blast_path', '');
@@ -138,8 +127,6 @@ function run_BLAST_tripal_job($program, $query, $database, $output_filestub, $op
       $blast_cmd .= " -$opt $val";
     }
   }
-
-  print "\nExecuting the following BLAST command:\n" . $blast_cmd . "\n";
 
   system($blast_cmd);
 

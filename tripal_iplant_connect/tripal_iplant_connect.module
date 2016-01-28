@@ -58,6 +58,7 @@ function iplant_ui($form, $form_state) {
 		'#type' => 'textfield',
 		'#title' => t('Query Name'),
 		'#default_value' => $nm,
+		'#maxlength' => 1024,
 		'#description' => t('Enter name of the query in the text area.'),
 	);
 
@@ -65,6 +66,7 @@ function iplant_ui($form, $form_state) {
 		'#type' => 'textfield',
 		'#title' => t('Query Sequence'),
 		'#default_value' => $seq,
+		'#maxlength' => 1024,
 		'#description' => t('Enter query sequence in the text area.'),
 	);
 
@@ -79,11 +81,14 @@ function iplant_ui($form, $form_state) {
 function iplant_ui_submit($form, &$form_state) {
 	global $user;
 
-	$mdir = $form_state['values']['dir'];
-	watchdog('iplant_ui_submit', "Got directory $mdir");
+	$family = $form_state['values']['fam'];
+	$name = $form_state['values']['nam'];
+	$seq = $form_state['values']['seq'];
+	watchdog('iplant_ui_submit', "Got $family, $name, $seq");
 	$job_args = array(
-		'arg1' => "$mdir",
-		'arg2' => 'Second arg'
+		'arg1' => "$family",
+		'arg2' => "$name",
+		'arg3' => "$seq"
   	);
 	$job_id = tripal_add_job(
 		'Run iPlant test',
@@ -136,11 +141,24 @@ function tripal_iplant_connect_submit($form, $form_state) {
   drupal_set_message(t($msg));
 }
 
-function run_iPlant_script($arg1, $arg2, $job_id=NULL) {
+function run_iPlant_script($arg1, $arg2, $arg3, $job_id=NULL) {
 
-  watchdog("iPlant run", "Running iPlant Script with args $arg1 and $arg2");
-  $resFile = "/tmp/job_$job_id.txt";
-  $res = system("ls -l $arg1 > $resFile");
+  watchdog("iPlant run", "Running iPlant Script with args $arg1, $arg2, and $arg3");
+  $family_path = "/usr/share/LIS/07_family_fasta";
+  $family_file = system("GetFamily $arg1");
+  $family = $family_path . "/" . $family_file;
+  $drupalTempDir = file_directory_temp();
+  $work_dir = $drupalTempDir . "/iplant_" . $job_id;
+  watchdog("iPlant run", "family: $family, workdir: $work_dir");
+  system("mkdir $work_dir");
+  $fastaFile = $work_dir . "/run.fa";
+  system("cp $family $fastaFile");
+  $extra = ">$arg2\n$arg3\n";
+  file_put_contents($fastaFile, $extra, FILE_APPEND);
+  watchdog("iPlant run", "temp dir: $drupalTempDir");
+  $resFile = "$work_dir/results.txt";
+  $logFile = "$work_dir/err.log";
+  $res = system("ProcessFasta run.fa ~umylny/.agave/current $work_dir > $resFile 2> $logFile");
   watchdog("iPlant results", "Got $res for job $job_id into file $resFile");
   print "\nGot Results = $res\n\n";
 }

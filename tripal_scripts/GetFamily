@@ -1,0 +1,13 @@
+#!/usr/bin/perl
+
+if ($#ARGV != 0) {
+	print "Usage: $0 <Full family name>\n";
+	exit(0);
+}
+
+$fullName = $ARGV[0];
+my ($prefix, $suf) = split /\./, $fullName;
+my ($fam, @rem) = split /-/, $suf;
+
+print "$fam\n";
+exit(0);

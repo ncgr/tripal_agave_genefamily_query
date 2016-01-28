@@ -4,21 +4,24 @@ use JSON::Parse ':all';
 use File::Temp qw/ tempfile tempdir mktemp /;
 use File::Basename;
 
-if ($#ARGV < 1) {
-	print "$0: Usage <input file> <config file>\n";
+if ($#ARGV < 2) {
+	print "$0: Usage <input file> <config file> <work dir>\n";
 	exit(0);
 }
 
 my $inputFile = $ARGV[0];
 my $configFile = $ARGV[1];
+my $workDir = $ARGV[2];
+
+chdir $workDir;
 
 my $globalRetry = 10;
 my $currentRetry = -1;
 my $globalTimeout = 1200;
 my $longTimeout = 1200;
 my $shortTimeout = 5;
-my $toDeleteCloud = "";
-my $toDeleteLocal = "";
+my @toDeleteCloud = ();
+my @toDeleteLocal = ();
 
 #
 # Get user and key from config file
@@ -52,12 +55,16 @@ print STDERR "Got unique file name: $iF, path: $uF\n";
 #
 
 print STDERR "Uploading file $iF\n";
+$msgNumber = 1;
+print STDERR "MESSAGE:Uploading data file:RUNNING:$msgNumber\n";
 UploadFile($inputFile, $iF, $uF, $key);
 
 #
 # Create and upload MAFFT config file
 #
 
+$msgNumber++;
+print STDERR "MESSAGE:Create and upload MAFFT config file:RUNNING:$msgNumber\n";
 my $uniqueCallBack = "1a626lz1";
 my $uniqueRequest = "Mafft run";
 
@@ -69,7 +76,7 @@ print $fH "{\n\t\"name\":\t\"$uniqueRequest\",\n\t\"appId\":\t\"Mafft-7.0.17u1\"
 close($fH);
 my $bN = "tt." . basename($fN) . ".json";
 system("mv $fN $bN");
-AddFile($toDeleteLocal, $bN);
+push @toDeleteLocal, $bN;
 UploadFile($bN, $bN, "$user/$bN", $key);
 sleep($shortTimeout);
 
@@ -78,14 +85,17 @@ sleep($shortTimeout);
 #
 
 my $timeout = $globalTimeout;
+$currentProc = "Mafft";
+$msgNumber++;
+print STDERR "MESSAGE:Mafft:INITIATING:$msgNumber\n";
 my ($status, $pid) = RunProcess($bN, $key, $timeout);
 if ($status eq "TIMEOUT") {
 	print "$0: Timed out waiting for Mafft, please try again.\n";
-	CleanupFinal($user, $key, $toDeleteCould, $toDeleteLocal);
+	CleanupFinal($user, $key);
 	exit(0);
 } elsif ($status eq "ERROR") {
 	print "$0: Process failed with message $m\n";
-	CleanupFinal($user, $key, $toDeleteCould, $toDeleteLocal);
+	CleanupFinal($user, $key);
 	exit(0);
 }
 sleep($shortTimeout);
@@ -95,12 +105,14 @@ sleep($shortTimeout);
 # Retrieve and confirm Mafft results file
 #
 
+$msgNumber++;
+print STDERR "MESSAGE:Retrieve Mafft results:RUNNING:$msgNumber\n";
 $fN = mktemp("mafft_out_XXXXX");
 $timeout = $globalTimeout;
 $status = GetResults($fN, "mafft_out.fa", $pid, $key, $timeout);
 if ($status eq "TIMEOUT") {
 	print "$0: Timed out waiting for Mafft results, please try again.\n";
-	CleanupFinal($user, $key, $toDeleteCould, $toDeleteLocal);
+	CleanupFinal($user, $key);
 	exit(0);
 }
 sleep($shortTimeout);
@@ -109,6 +121,8 @@ sleep($shortTimeout);
 # Upload and confirm Mafft output file
 #
 
+$msgNumber++;
+print STDERR "MESSAGE:Upload Mafft data:RUNNING:$msgNumber\n";
 $uF = "$user/$fN";
 UploadFile($fN, $fN, $uF, $key);
 sleep($shortTimeout);
@@ -119,6 +133,8 @@ my $mafftResults = $fN;
 # Create and upload FastTree config file
 #
 
+$msgNumber++;
+print STDERR "MESSAGE:Create and upload FastTree config file:RUNNING:$msgNumber\n";
 $uniqueCallBack = "1a626lz1";
 $uniqueRequest = "FastTree run";
 
@@ -130,7 +146,7 @@ print $fH "{\n\t\"name\":\t\"$uniqueRequest\",\n\t\"appId\":\t\"FasttreeDispatch
 close($fH);
 my $bN = "tt." . basename($fN) . ".json";
 system("mv $fN $bN");
-AddFile($toDeleteLocal, $bN);
+push @toDeleteLocal, $bN;
 UploadFile($bN, $bN, "$user/$bN", $key);
 sleep($shortTimeout);
 
@@ -138,15 +154,18 @@ sleep($shortTimeout);
 # Run FastTree
 #
 
+$msgNumber++;
+print STDERR "MESSAGE:FastTree:INITIATING:$msgNumber\n";
+$currentProc = "FastTree";
 my $timeout = $longTimeout;
 my ($status, $pid) = RunProcess($bN, $key, $timeout);
 if ($status eq "TIMEOUT") {
 	print "$0: Timed out waiting for Mafft, please try again.\n";
-	CleanupFinal($user, $key, $toDeleteCould, $toDeleteLocal);
+	CleanupFinal($user, $key);
 	exit(0);
 } elsif ($status eq "ERROR") {
 	print "$0: Process failed with message $m\n";
-	CleanupFinal($user, $key, $toDeleteCould, $toDeleteLocal);
+	CleanupFinal($user, $key);
 	exit(0);
 }
 sleep($shortTimeout);
@@ -156,23 +175,37 @@ sleep($shortTimeout);
 # Retrieve FastTree Results
 #
 
+$msgNumber++;
+print STDERR "MESSAGE:Retrieve results and cleanup:RUNNING:$msgNumber\n";
 $fN = mktemp("FastTree_XXXXX");
 $timeout = $globalTimeout;
 $status = GetResults($fN, "fasttree.nwk", $pid, $key, $timeout);
 if ($status eq "TIMEOUT") {
 	print "$0: Timed out waiting for FastTree results, please try again.\n";
-	CleanupFinal($user, $key, $toDeleteCould, $toDeleteLocal);
+	CleanupFinal($user, $key);
 	exit(0);
 }
 
 my $fastTreeResults = $fN;
-print "Mafft Results File: $mafftResults, Fast Tree Results File: $fastTreeResults\n";
 
 #
 # Cleanup
 #
 
-CleanupFinal($user, $key, $toDeleteCould, $toDeleteLocal);
+CleanupFinal($user, $key);
+
+system("mv $mafftResults mafft_out.fa");
+system("mv $fastTreeResults fasttree.nwk");
+print "mafft_out.fa,fasttree.nwk\n";
+
+my @path = split /\//, $workDir;
+my $nm = $path[$#path];
+my $fullPath = "/var/www/html/sites/default/files/$nm";
+
+system("mkdir $fullPath");
+system("cp mafft_out.fa $fullPath");
+system("cp fasttree.nwk $fullPath");
+
 exit(0);
 
 #
@@ -240,7 +273,7 @@ sub ProcessResponse {
 		}
 		my $err = substr($ret, $loc);
 		print "$0 (ProcessRequest:", caller, "): Curl error after retry: $err";
-		CleanupFinal($user, $key, $toDeleteCould, $toDeleteLocal);
+		CleanupFinal($user, $key);
 		exit(0);
 	}
 	if (substr($ret, 0, 1) eq "<") {
@@ -252,7 +285,7 @@ sub ProcessResponse {
 			return ReconnectAndResubmit($req);
 		} else {
 			print "$0 (ProcessResponse:", caller, "): Error from curl request: $ret\n";
-			CleanupFinal($user, $key, $toDeleteCould, $toDeleteLocal);
+			CleanupFinal($user, $key);
 			exit(0);
 		}
 		if (substr($ret, 0, 1) eq "<") {
@@ -260,14 +293,14 @@ sub ProcessResponse {
 			$msgStart = $tokens[1];
 			($msg, @other) = split /\</, $msgStart;
 			print "$0 (ProcessResponse:", caller, "): Error from curl request: $ret\n";
-			CleanupFinal($user, $key, $toDeleteCould, $toDeleteLocal);
+			CleanupFinal($user, $key);
 			exit(0);
 		}
 	}
 	my $loc = index($ret, "{");
 	if ($loc == -1) {
 		print "$0 (ProcessResponse:", caller, "): No valid JSON structure in buf: $ret\n\treq = $req\n";
-		CleanupFinal($user, $key, $toDeleteCould, $toDeleteLocal);
+		CleanupFinal($user, $key);
 		exit(0);
 	}
 	my $jsonRet = substr($ret, $loc);
@@ -300,7 +333,7 @@ sub ProcessResponse {
 			}
 		} else {
 			print "$0 (ProcessResults:", caller, "): Unexpected JSON structure at result(", ref($pvar->{result}), "): $jsonRet\n";
-			CleanupFinal($user, $key, $toDeleteCould, $toDeleteLocal);
+			CleanupFinal($user, $key);
 			exit(0);
 		}
 		$pid = $results->{id};
@@ -321,15 +354,13 @@ sub ConfirmFile {
 		$t = RunCurl($c);
 		my ($s, $m) = ProcessResponse($t, $c);
 		if ($s eq "success") {
-			return;
+			return "success";
 		}
 		sleep ($shortTimeout);
 		$count++;
 	}
 
-	print "$0 (ConfirmFile): Unable to confirm file upload (timeout $tm seconds)\n";
-	CleanupFinal($user, $key, $toDeleteCould, $toDeleteLocal);
-	exit(0);
+	return "failed";
 }
 
 sub SelectUnique {
@@ -362,6 +393,7 @@ sub SelectUnique {
 sub UploadFile {
 	my ($f, $f2, $fp, $k) = @_;
 	my $cmd, $t, $s, $m;
+	my $tryIt = 5;
 
 	$cmd = "curl -# -k -H \"Authorization: Bearer $k\" -X POST -F \"fileToUpload=\@$f\" -F \"fileName=$f2\" https://agave.iplantc.org/files/v2/media/$user/?pretty=true";
 	$t = RunCurl($cmd);
@@ -369,14 +401,21 @@ sub UploadFile {
 	($s, $m) = ProcessResponse($t, $cmd);
 	if ($s ne "success") {
 		print "$0 (UploadFile): Curl failed to upload file ($f): $m\n";
-		CleanupFinal($user, $k, $toDeleteCould, $toDeleteLocal);
+		CleanupFinal($user, $k);
 		exit(0);
 	}
 
 	sleep($shortTimeout);
-	my $timeout = $globalTimeout;
-	ConfirmFile($fp, $timeout, $k);
-	AddFile($toDeleteCloud, $f2);
+	my $timeout = 3;
+	while (ConfirmFile($fp, $timeout, $k) != "success" and $tryIt > 0) {
+		$tryIt--;
+	}
+	if ($tryIt <= 0) {
+		print "$0 (UploadFile): Unable to confirm file upload (timeout $tm seconds)\n";
+		CleanupFinal($user, $key);
+		exit(0);
+	}
+	push @toDeleteCloud, $f2;
 }
 
 sub RunProcess {
@@ -385,15 +424,25 @@ sub RunProcess {
 	my $count = 0;
 
 	$c = "curl -sk -H \"Authorization: Bearer $k\" -X POST -F \"fileToUpload=\@$config\" https://agave.iplantc.org/jobs/v2/?pretty=true";
-	$t = RunCurl($c);
-	($s, $m, $id) = ProcessResponse($t, $c);
-	if ($s ne "success") {
-		return ("ERROR", $m);
+	while ($count < 2) {
+		$t = RunCurl($c);
+		($s, $m, $id) = ProcessResponse($t, $c);
+		if ($s eq "success") {
+			break;
+		}
+		sleep($shortTimeout);
+		$count++;
 	}
+	if ($s ne "success") {
+		return("ERROR", $m);
+	}
+	$count = 0;
 	while ($count < $tm) {
 		$c = "curl -sk -H \"Authorization: Bearer $k\" https://agave.iplantc.org/jobs/v2/$id/status?pretty=true";
 		$t = RunCurl($c);
 		($s, $m, $id, $jobStat) = ProcessResponse($t, $c);
+		$msgNumber++;
+		print STDERR "MESSAGE:$currentProc:$jobStat:$msgNumber\n";
 		if ($jobStat eq "FINISHED") {
 			return ($s, $id);
 		}
@@ -480,25 +529,16 @@ sub RunCurl {
 }
 
 sub CleanupFinal {
-	my ($u, $k, $cloud, $local) = @_;
+	my ($u, $k) = @_;
 	my $c, $t;
 
-	for my $f (split /,/, $cloud) {
+	for my $f (@toDeleteCloud) {
 		sleep($shortTimeout);
 		$c = "curl -sk -H \"Authorization: Bearer $k\" -X DELETE https://agave.iplantc.org/files/v2/media/$u/$f?pretty=true";
 		$t = RunCurl($c);
 	}
-	for my $f (split /,/, $local) {
+	for my $f (@toDeleteLocal) {
 		print STDERR "Removing $f\n";
 		system("rm $f");
 	}
-}
-
-sub AddFile {
-	my ($str, $add) = @_;
-
-	if ($str ne "") {
-		$str .= ",";
-	}
-	$str .= $add;
 }
